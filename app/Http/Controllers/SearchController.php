@@ -17,42 +17,44 @@ class SearchController extends Controller
 {
     public function result(Request $request)
     {
+        $author = $request->input('author');
         $keyword = $request->input('keyword');
-        $method  = $request->input('method');
+        // $method  = $request->input('method');
+        $limit = $request->input('limit', 5);
 
         $proxy = '';
-        $result = $this->extract_html("https://www.kompas.com/", $proxy);
+        $query = urlencode($author . " " . $keyword);
+        $url = "https://scholar.google.com/scholar?q={$query}";
+
+        $result = $this->extract_html($url, $proxy);
 
         $i = 0;
         $data_crawling = [];
-        $sample_data   = [];
+        // $sample_data   = [];
 
         if ($result['code'] == 200) {
 
             $html = new \simple_html_dom();
             $html->load($result['message']);
 
-            foreach ($html->find('div[class="wSpec-item"]') as $news) {
-                if ($i >= 10) break;
+            foreach ($html->find('div.gs_r.gs_or.gs_scl') as $item) {
+                if ($i >= $limit) break;
 
-                else {
-                    $title = $news->find('h4[class="wSpec-title"]', 0)->innertext ?? '';
-                    $link  = $news->find('a', 0)->href ?? '';
+                $title = $item->find('.gs_rt a', 0)->plaintext ?? "-";
 
-                    // $sendTitle = str_replace(" ", "##", $title);
-                    // $stopTitle = shell_exec("python preprocessing.py $sendTitle");
+                $link = $item->find('.gs_rt a', 0)->href ?? "-";
 
-                    $stopTitle = "";
+                // Masukkan ke array
+                $data_crawling[] = [
+                    "title" => $title,
+                    // "authors" => $meta,
+                    // "release_date" => $year,
+                    // "journal_name" => $journal,
+                    // "citations" => $citation,
+                    "link" => $link,
+                    "similarity" => "-",
+                ];
 
-                    $data_crawling[] = [
-                        "title"      => $title,
-                        "link"       => $link,
-                        "processed"  => $stopTitle,
-                        "similarity" => 0.0,
-                    ];
-
-                    // $sample_data[] = $stopTitle;
-                }
                 $i++;
             }
 
@@ -87,7 +89,12 @@ class SearchController extends Controller
             // });
         }
 
-        return view('result', compact('keyword', 'method', 'data_crawling'));
+        return view('result', [
+            'author' => $author,
+            'keyword' => $keyword,
+            'limit' => $limit,
+            'data_crawling' => $data_crawling
+        ]);
     }
 
     function extract_html($url, $proxy)
