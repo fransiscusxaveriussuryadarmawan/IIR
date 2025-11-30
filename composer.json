@@ -9,6 +9,7 @@
         "php": "^8.2",
         "laravel/framework": "^12.0",
         "laravel/tinker": "^2.10.1",
+        "php-ai/php-ml": "^0.10.0",
         "sastrawi/sastrawi": "^1.2",
         "stichoza/google-translate-php": "^5.3",
         "wamania/php-stemmer": "^4.0"

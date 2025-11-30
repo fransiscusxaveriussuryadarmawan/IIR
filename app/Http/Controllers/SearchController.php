@@ -11,6 +11,12 @@ use Sastrawi\Stemmer\StemmerFactory;
 use Sastrawi\StopWordRemover\StopWordRemoverFactory;
 use Wamania\Snowball\Stemmer\English as EnglishStemmer;
 
+//! Library untuk FEATURE WEIGHTING & PREPROCESSING (PHP-ML)
+use Phpml\FeatureExtraction\TokenCountVectorizer;
+use Phpml\FeatureExtraction\TfIdfTransformer;
+use Phpml\Tokenization\WhitespaceTokenizer;
+use Phpml\FeatureExtraction\StopWords\English as PhpmlEnglishStopwords;
+
 include_once base_path('simple_html_dom.php');
 
 class SearchController extends Controller
@@ -85,15 +91,16 @@ class SearchController extends Controller
                             $link = $html_art->find('a.gsc_oci_title_link', 0)->href ?? "-";
                         }
 
-                        //! Versinya bryan
+                        //! Versinya bryan (SIMILARITY TF-Raw + COSINE, TANPA TF-IDF)
+                        //! Disimpan sebagai referensi implementasi awal (tidak dipakai lagi).
                         // ================================
                         //     PREPROCESSING + SIMILARITY
                         // ================================
                         // $prep_keyword = implode(" ", $this->preprocessing($keyword));
                         // $prep_title   = implode(" ", $this->preprocessing($title));
-
+                        //
                         // $similarity_score = $this->calculateSimilarity($prep_keyword, $prep_title);
-
+                        //
                         // if ($similarity_score > 0) {
                         //     $data_crawling[] = [
                         //         "title" => $title,
@@ -107,12 +114,12 @@ class SearchController extends Controller
                         //     ];
                         // }
 
-                        //! Versinya darius
-                        // simpan hanya data + token judul dulu
+                        //! Versinya darius (PREPROCESSING SAJA di tahap CRAWLING)
+                        //! Di tahap ini kita hanya simpan token hasil preprocessing judul.
                         $prep_title_tokens = $this->preprocessing($title);
 
-                        if (empty($prep_title_tokens) || $title == "-")
-                        {
+                        // Skip jika judul kosong / tidak bermakna setelah preprocessing
+                        if (empty($prep_title_tokens) || $title == "-") {
                             $i++;
                             continue;
                         }
@@ -124,7 +131,7 @@ class SearchController extends Controller
                             "journal_name" => $journal,
                             "citations" => $citations,
                             "link" => $link,
-                            "similarity" => 0, // nanti diisi setelah TF-IDF
+                            "similarity" => 0, // nanti diisi setelah TF-IDF + COSINE
                             "preprocessed_title" => $prep_title_tokens
                         ];
 
@@ -134,10 +141,11 @@ class SearchController extends Controller
             }
         }
 
-        //! Versinya darius
+        //! Versinya darius (LANJUTAN)
         // ================================
         //  FEATURE WEIGHTING + SIMILARITY
         //   (TF-IDF + Cosine Coefficient)
+        //   → MENGGUNAKAN LIBRARY PHP-ML
         // ================================
         $prep_keyword_tokens = $this->preprocessing($keyword);
 
@@ -145,7 +153,7 @@ class SearchController extends Controller
             // Ambil semua token judul
             $all_doc_tokens = array_column($data_crawling, 'preprocessed_title');
 
-            // Hitung similarity berbasis TF-IDF
+            // Hitung similarity berbasis TF-IDF (PHP-ML)
             $similarities = $this->calculateTfidfSimilarities(
                 $prep_keyword_tokens,
                 $all_doc_tokens
@@ -176,7 +184,7 @@ class SearchController extends Controller
     // ==================================================
     private function preprocessing($text)
     {
-        // 1. Cleaning
+        // 1. Cleaning (case folding + remove url + non-letter)
         $clean = strtolower($text);
         $clean = preg_replace('/https?:\/\/\S+/', '', $clean);
         $clean = preg_replace('/[^a-zA-Z\s]/', ' ', $clean);
@@ -185,18 +193,18 @@ class SearchController extends Controller
 
         if ($clean == "") return [];
 
-        // 2. DETEKSI BAHASA
+        // 2. DETEKSI BAHASA (AUTO) MENGGUNAKAN GOOGLE TRANSLATE
         try {
             $tr = new GoogleTranslate();
             $tr->setSource();  // auto detect
             $tr->setTarget('en');
             $tr->translate($clean);
-            $lang = $tr->getLastDetectedSource();  // "id" / "en"
+            $lang = $tr->getLastDetectedSource();  // "id" / "en" / lainnya
         } catch (\Exception $e) {
             $lang = "en";
         }
 
-        // fallback jika Google gagal
+        // fallback jika Google gagal / bahasa tidak dikenali
         if (!in_array($lang, ['id', 'en'])) {
             $lang = "en";
         }
@@ -222,23 +230,46 @@ class SearchController extends Controller
 
         // ==================================================
         //       INGGRIS → PORTER STEMMER
+        //   + STOPWORDS TXT (LAMA) + PHP-ML (BARU)
         // ==================================================
         $stemmer = new EnglishStemmer();
 
-        // load stopwords english
-        $path = storage_path('english_stopwords.txt');
+        //! Versi lama (pakai file english_stopwords.txt)
+        //! Disimpan sebagai referensi:
+        // $path = storage_path('english_stopwords.txt');
+        // if (!file_exists($path)) {
+        //     return $words; // fallback jika file tidak ada
+        // }
+        // $stopwords = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        // $filtered = array_filter($words, function ($w) use ($stopwords) {
+        //     return !in_array($w, $stopwords) && strlen($w) > 2;
+        // });
 
-        if (!file_exists($path)) {
-            return $words; // fallback jika file tidak ada
+        //! Versi baru: kombinasi STOPWORDS dari file + PHP-ML
+        $fileStopwords = [];
+        $path = storage_path('english_stopwords.txt');
+        if (file_exists($path)) {
+            $fileStopwords = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
         }
 
-        $stopwords = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        // Objek stopwords English dari PHP-ML
+        $phpmlStop = new PhpmlEnglishStopwords();
 
-        $filtered = array_filter($words, function ($w) use ($stopwords) {
-            return !in_array($w, $stopwords) && strlen($w) > 2;
+        // Filter stopwords + buang kata terlalu pendek
+        $filtered = array_filter($words, function ($w) use ($phpmlStop, $fileStopwords) {
+            // buang kalau:
+            // - termasuk stopword versi PHP-ML, ATAU
+            // - termasuk stopword custom dari file txt, ATAU
+            // - panjang kata <= 2
+            return !$phpmlStop->isStopWord($w)
+                && !in_array($w, $fileStopwords)
+                && strlen($w) > 2;
         });
 
-        $stemmed = array_map(fn($w) => $stemmer->stem($w), $filtered);
+        // Stemming dengan Snowball English stemmer
+        $stemmed = array_map(function ($w) use ($stemmer) {
+            return $stemmer->stem($w);
+        }, $filtered);
 
         return array_values($stemmed);
     }
@@ -246,98 +277,170 @@ class SearchController extends Controller
 
     //! Versinya bryan
     // ==================================================
-    //                 COSINE SIMILARITY
+    //              COSINE SIMILARITY (TF-Raw)
+    //                 (IMPLEMENTASI AWAL)
     // ==================================================
     // private function calculateSimilarity($str1, $str2)
     // {
     //     $tokens1 = array_count_values(explode(" ", $str1));
     //     $tokens2 = array_count_values(explode(" ", $str2));
-
+    //
     //     $vocab = array_unique(array_merge(array_keys($tokens1), array_keys($tokens2)));
-
+    //
     //     $dot = 0; $mag1 = 0; $mag2 = 0;
-
+    //
     //     foreach ($vocab as $w) {
     //         $v1 = $tokens1[$w] ?? 0;
     //         $v2 = $tokens2[$w] ?? 0;
-
+    //
     //         $dot += $v1 * $v2;
     //         $mag1 += $v1 * $v1;
     //         $mag2 += $v2 * $v2;
     //     }
-
+    //
     //     if ($mag1 == 0 || $mag2 == 0) return 0;
-
+    //
     //     return number_format($dot / (sqrt($mag1) * sqrt($mag2)), 4);
     // }
 
-    //! Versinya darius
+    //! Versinya darius (MANUAL TF-IDF + COSINE)
+    //! Disimpan sebagai backup / referensi jika ingin menunjukkan perhitungan manual.
     // ==================================================
     //        FEATURE WEIGHTING (TF-IDF) + COSINE
+    //              (IMPLEMENTASI MANUAL)
+    // ==================================================
+    // private function calculateTfidfSimilaritiesManual(array $queryTokens, array $documentsTokens)
+    // {
+    //     $N = count($documentsTokens);
+    //     if ($N == 0) return [];
+    //
+    //     // 1. Hitung DF (document frequency)
+    //     $df = [];
+    //     foreach ($documentsTokens as $tokens) {
+    //         $unique = array_unique($tokens);
+    //         foreach ($unique as $term) {
+    //             if (!isset($df[$term])) $df[$term] = 0;
+    //             $df[$term]++;
+    //         }
+    //     }
+    //
+    //     // 2. Hitung IDF dengan smoothing kecil
+    //     $idf = [];
+    //     foreach ($df as $term => $df_t) {
+    //         // +1 smoothing supaya tidak dibagi 0, +1 di log supaya tetap positif
+    //         $idf[$term] = log(($N + 1) / ($df_t + 1)) + 1;
+    //     }
+    //
+    //     // 3. TF query
+    //     $tf_q = array_count_values($queryTokens);
+    //
+    //     $similarities = [];
+    //
+    //     // 4. Untuk setiap dokumen → hitung TF-IDF + cosine dengan query
+    //     foreach ($documentsTokens as $idx => $docTokens) {
+    //
+    //         $tf_d = array_count_values($docTokens);
+    //
+    //         // vocab per pasangan = gabungan term yang muncul di query atau doc
+    //         $vocab = array_unique(array_merge(
+    //             array_keys($tf_q),
+    //             array_keys($tf_d)
+    //         ));
+    //
+    //         $dot = 0; $mag_q = 0; $mag_d = 0;
+    //
+    //         foreach ($vocab as $term) {
+    //             $tf_q_term = $tf_q[$term] ?? 0;
+    //             $tf_d_term = $tf_d[$term] ?? 0;
+    //
+    //             $idf_term = $idf[$term] ?? 0; // jika term hanya muncul di query, idf bisa 0
+    //
+    //             // bobot TF-IDF
+    //             $w_q = $tf_q_term * $idf_term;
+    //             $w_d = $tf_d_term * $idf_term;
+    //
+    //             $dot   += $w_q * $w_d;
+    //             $mag_q += $w_q * $w_q;
+    //             $mag_d += $w_d * $w_d;
+    //         }
+    //
+    //         if ($mag_q == 0 || $mag_d == 0) {
+    //             $similarities[$idx] = 0;
+    //         } else {
+    //             $similarities[$idx] = round($dot / (sqrt($mag_q) * sqrt($mag_d)), 4);
+    //         }
+    //     }
+    //
+    //     return $similarities;
+    // }
+
+    //! Versinya darius (AKTIF) – menggunakan PHP-ML
+    // ==================================================
+    //        FEATURE WEIGHTING (TF-IDF) + COSINE
+    //          MENGGUNAKAN LIBRARY PHP-ML
     // ==================================================
     private function calculateTfidfSimilarities(array $queryTokens, array $documentsTokens)
     {
-        $N = count($documentsTokens);
-        if ($N == 0) return [];
+        // 0. Ubah token → string (dipisah spasi)
+        $queryString = implode(' ', $queryTokens);
+        $docStrings  = array_map(function ($tokens) {
+            return implode(' ', $tokens);
+        }, $documentsTokens);
 
-        // 1. Hitung DF (document frequency)
-        $df = [];
-        foreach ($documentsTokens as $tokens) {
-            $unique = array_unique($tokens);
-            foreach ($unique as $term) {
-                if (!isset($df[$term])) $df[$term] = 0;
-                $df[$term]++;
-            }
+        // Corpus: elemen pertama = query, sisanya = dokumen
+        $corpus = array_merge([$queryString], $docStrings);
+
+        if (trim($queryString) === '' || empty($docStrings)) {
+            return [];
         }
 
-        // 2. Hitung IDF dengan smoothing kecil
-        $idf = [];
-        foreach ($df as $term => $df_t) {
-            // +1 smoothing supaya tidak dibagi 0, +1 di log supaya tetap positif
-            $idf[$term] = log(($N + 1) / ($df_t + 1)) + 1;
-        }
+        // 1. Vectorizer: TF (Term Count) dengan tokenizer whitespace
+        $vectorizer = new TokenCountVectorizer(new WhitespaceTokenizer());
+        $vectorizer->fit($corpus);
+        $vectorizer->transform($corpus); // $corpus sekarang berisi TF
 
-        // 3. TF query
-        $tf_q = array_count_values($queryTokens);
+        // 2. TF-IDF Transformer: ubah TF → TF-IDF
+        $tfIdf = new TfIdfTransformer($corpus);
+        $tfIdf->transform($corpus); // $corpus sekarang berisi TF-IDF
 
+        // 3. Ambil vektor query & dokumen
+        $queryVector = $corpus[0];
+        $docVectors  = array_slice($corpus, 1);
+
+        // 4. Hitung cosine similarity antara query & tiap dokumen
         $similarities = [];
-
-        // 4. Untuk setiap dokumen → hitung TF-IDF + cosine dengan query
-        foreach ($documentsTokens as $idx => $docTokens) {
-
-            $tf_d = array_count_values($docTokens);
-
-            // vocab per pasangan = gabungan term yang muncul di query atau doc
-            $vocab = array_unique(array_merge(
-                array_keys($tf_q),
-                array_keys($tf_d)
-            ));
-
-            $dot = 0; $mag_q = 0; $mag_d = 0;
-
-            foreach ($vocab as $term) {
-                $tf_q_term = $tf_q[$term] ?? 0;
-                $tf_d_term = $tf_d[$term] ?? 0;
-
-                $idf_term = $idf[$term] ?? 0; // jika term hanya muncul di query, idf bisa 0
-
-                // bobot TF-IDF
-                $w_q = $tf_q_term * $idf_term;
-                $w_d = $tf_d_term * $idf_term;
-
-                $dot   += $w_q * $w_d;
-                $mag_q += $w_q * $w_q;
-                $mag_d += $w_d * $w_d;
-            }
-
-            if ($mag_q == 0 || $mag_d == 0) {
-                $similarities[$idx] = 0;
-            } else {
-                $similarities[$idx] = round($dot / (sqrt($mag_q) * sqrt($mag_d)), 4);
-            }
+        foreach ($docVectors as $idx => $docVector) {
+            $similarities[$idx] = $this->cosineSimilarity($queryVector, $docVector);
         }
 
         return $similarities;
+    }
+
+    // ==================================================
+    //          COSINE SIMILARITY HELPER (PHP-ML)
+    // ==================================================
+    private function cosineSimilarity(array $vecA, array $vecB)
+    {
+        $dot  = 0.0;
+        $magA = 0.0;
+        $magB = 0.0;
+
+        $len = max(count($vecA), count($vecB));
+
+        for ($i = 0; $i < $len; $i++) {
+            $a = $vecA[$i] ?? 0.0;
+            $b = $vecB[$i] ?? 0.0;
+
+            $dot  += $a * $b;
+            $magA += $a * $a;
+            $magB += $b * $b;
+        }
+
+        if ($magA == 0.0 || $magB == 0.0) {
+            return 0.0;
+        }
+
+        return round($dot / (sqrt($magA) * sqrt($magB)), 4);
     }
 
     // ==================================================
