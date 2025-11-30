@@ -85,31 +85,81 @@ class SearchController extends Controller
                             $link = $html_art->find('a.gsc_oci_title_link', 0)->href ?? "-";
                         }
 
+                        //! Versinya bryan
                         // ================================
                         //     PREPROCESSING + SIMILARITY
                         // ================================
-                        $prep_keyword = implode(" ", $this->preprocessing($keyword));
-                        $prep_title   = implode(" ", $this->preprocessing($title));
+                        // $prep_keyword = implode(" ", $this->preprocessing($keyword));
+                        // $prep_title   = implode(" ", $this->preprocessing($title));
 
-                        $similarity_score = $this->calculateSimilarity($prep_keyword, $prep_title);
+                        // $similarity_score = $this->calculateSimilarity($prep_keyword, $prep_title);
 
-                        if ($similarity_score > 0) {
-                            $data_crawling[] = [
-                                "title" => $title,
-                                "authors" => $authors,
-                                "release_date" => $release_date,
-                                "journal_name" => $journal,
-                                "citations" => $citations,
-                                "link" => $link,
-                                "similarity" => $similarity_score,
-                                "preprocessed_title" => $this->preprocessing($title)
-                            ];
+                        // if ($similarity_score > 0) {
+                        //     $data_crawling[] = [
+                        //         "title" => $title,
+                        //         "authors" => $authors,
+                        //         "release_date" => $release_date,
+                        //         "journal_name" => $journal,
+                        //         "citations" => $citations,
+                        //         "link" => $link,
+                        //         "similarity" => $similarity_score,
+                        //         "preprocessed_title" => $this->preprocessing($title)
+                        //     ];
+                        // }
+
+                        //! Versinya darius
+                        // simpan hanya data + token judul dulu
+                        $prep_title_tokens = $this->preprocessing($title);
+
+                        if (empty($prep_title_tokens) || $title == "-")
+                        {
+                            $i++;
+                            continue;
                         }
+
+                        $data_crawling[] = [
+                            "title" => $title,
+                            "authors" => $authors,
+                            "release_date" => $release_date,
+                            "journal_name" => $journal,
+                            "citations" => $citations,
+                            "link" => $link,
+                            "similarity" => 0, // nanti diisi setelah TF-IDF
+                            "preprocessed_title" => $prep_title_tokens
+                        ];
 
                         $i++;
                     }
                 }
             }
+        }
+
+        //! Versinya darius
+        // ================================
+        //  FEATURE WEIGHTING + SIMILARITY
+        //   (TF-IDF + Cosine Coefficient)
+        // ================================
+        $prep_keyword_tokens = $this->preprocessing($keyword);
+
+        if (!empty($data_crawling) && !empty($prep_keyword_tokens)) {
+            // Ambil semua token judul
+            $all_doc_tokens = array_column($data_crawling, 'preprocessed_title');
+
+            // Hitung similarity berbasis TF-IDF
+            $similarities = $this->calculateTfidfSimilarities(
+                $prep_keyword_tokens,
+                $all_doc_tokens
+            );
+
+            // Masukkan kembali ke array utama
+            foreach ($data_crawling as $idx => &$row) {
+                $row['similarity'] = $similarities[$idx] ?? 0;
+            }
+
+            // Optionally: buang artikel yang similarity 0
+            $data_crawling = array_values(array_filter($data_crawling, function ($row) {
+                return $row['similarity'] > 0;
+            }));
         }
 
         // SORTING (DESC)
@@ -194,32 +244,101 @@ class SearchController extends Controller
     }
 
 
+    //! Versinya bryan
     // ==================================================
     //                 COSINE SIMILARITY
     // ==================================================
-    private function calculateSimilarity($str1, $str2)
+    // private function calculateSimilarity($str1, $str2)
+    // {
+    //     $tokens1 = array_count_values(explode(" ", $str1));
+    //     $tokens2 = array_count_values(explode(" ", $str2));
+
+    //     $vocab = array_unique(array_merge(array_keys($tokens1), array_keys($tokens2)));
+
+    //     $dot = 0; $mag1 = 0; $mag2 = 0;
+
+    //     foreach ($vocab as $w) {
+    //         $v1 = $tokens1[$w] ?? 0;
+    //         $v2 = $tokens2[$w] ?? 0;
+
+    //         $dot += $v1 * $v2;
+    //         $mag1 += $v1 * $v1;
+    //         $mag2 += $v2 * $v2;
+    //     }
+
+    //     if ($mag1 == 0 || $mag2 == 0) return 0;
+
+    //     return number_format($dot / (sqrt($mag1) * sqrt($mag2)), 4);
+    // }
+
+    //! Versinya darius
+    // ==================================================
+    //        FEATURE WEIGHTING (TF-IDF) + COSINE
+    // ==================================================
+    private function calculateTfidfSimilarities(array $queryTokens, array $documentsTokens)
     {
-        $tokens1 = array_count_values(explode(" ", $str1));
-        $tokens2 = array_count_values(explode(" ", $str2));
+        $N = count($documentsTokens);
+        if ($N == 0) return [];
 
-        $vocab = array_unique(array_merge(array_keys($tokens1), array_keys($tokens2)));
-
-        $dot = 0; $mag1 = 0; $mag2 = 0;
-
-        foreach ($vocab as $w) {
-            $v1 = $tokens1[$w] ?? 0;
-            $v2 = $tokens2[$w] ?? 0;
-
-            $dot += $v1 * $v2;
-            $mag1 += $v1 * $v1;
-            $mag2 += $v2 * $v2;
+        // 1. Hitung DF (document frequency)
+        $df = [];
+        foreach ($documentsTokens as $tokens) {
+            $unique = array_unique($tokens);
+            foreach ($unique as $term) {
+                if (!isset($df[$term])) $df[$term] = 0;
+                $df[$term]++;
+            }
         }
 
-        if ($mag1 == 0 || $mag2 == 0) return 0;
+        // 2. Hitung IDF dengan smoothing kecil
+        $idf = [];
+        foreach ($df as $term => $df_t) {
+            // +1 smoothing supaya tidak dibagi 0, +1 di log supaya tetap positif
+            $idf[$term] = log(($N + 1) / ($df_t + 1)) + 1;
+        }
 
-        return number_format($dot / (sqrt($mag1) * sqrt($mag2)), 4);
+        // 3. TF query
+        $tf_q = array_count_values($queryTokens);
+
+        $similarities = [];
+
+        // 4. Untuk setiap dokumen → hitung TF-IDF + cosine dengan query
+        foreach ($documentsTokens as $idx => $docTokens) {
+
+            $tf_d = array_count_values($docTokens);
+
+            // vocab per pasangan = gabungan term yang muncul di query atau doc
+            $vocab = array_unique(array_merge(
+                array_keys($tf_q),
+                array_keys($tf_d)
+            ));
+
+            $dot = 0; $mag_q = 0; $mag_d = 0;
+
+            foreach ($vocab as $term) {
+                $tf_q_term = $tf_q[$term] ?? 0;
+                $tf_d_term = $tf_d[$term] ?? 0;
+
+                $idf_term = $idf[$term] ?? 0; // jika term hanya muncul di query, idf bisa 0
+
+                // bobot TF-IDF
+                $w_q = $tf_q_term * $idf_term;
+                $w_d = $tf_d_term * $idf_term;
+
+                $dot   += $w_q * $w_d;
+                $mag_q += $w_q * $w_q;
+                $mag_d += $w_d * $w_d;
+            }
+
+            if ($mag_q == 0 || $mag_d == 0) {
+                $similarities[$idx] = 0;
+            } else {
+                $similarities[$idx] = round($dot / (sqrt($mag_q) * sqrt($mag_d)), 4);
+            }
+        }
+
+        return $similarities;
     }
-
 
     // ==================================================
     //                 EXTRACT HTML
