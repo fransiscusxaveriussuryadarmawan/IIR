@@ -5,7 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 
-// Library
+// Library untuk DETEKSI BAHASA & STEMMING & STOPWORD REMOVAL
 use Stichoza\GoogleTranslate\GoogleTranslate;
 use Sastrawi\Stemmer\StemmerFactory;
 use Sastrawi\StopWordRemover\StopWordRemoverFactory;
@@ -35,9 +35,7 @@ class SearchController extends Controller
         $i = 0;
         $data_crawling = [];
 
-        // ===============================
-        //         START CRAWLING
-        // ===============================
+        // (1) START CRAWLING
         if ($result['code'] == 200) {
 
             $html = new \simple_html_dom();
@@ -116,9 +114,10 @@ class SearchController extends Controller
 
                         //! Versinya darius (PREPROCESSING SAJA di tahap CRAWLING)
                         //! Di tahap ini kita hanya simpan token hasil preprocessing judul.
+
+                        // (2) START PREPROCESSING JUDUL
                         $prep_title_tokens = $this->preprocessing($title);
 
-                        // Skip jika judul kosong / tidak bermakna setelah preprocessing
                         if (empty($prep_title_tokens) || $title == "-") {
                             $i++;
                             continue;
@@ -131,7 +130,7 @@ class SearchController extends Controller
                             "journal_name" => $journal,
                             "citations" => $citations,
                             "link" => $link,
-                            "similarity" => 0, // nanti diisi setelah TF-IDF + COSINE
+                            "similarity" => 0,
                             "preprocessed_title" => $prep_title_tokens
                         ];
 
@@ -147,10 +146,13 @@ class SearchController extends Controller
         //   (TF-IDF + Cosine Coefficient)
         //   → MENGGUNAKAN LIBRARY PHP-ML
         // ================================
+
+        // (2) START PREPROCESSING KEYWORD
         $prep_keyword_tokens = $this->preprocessing($keyword);
 
+        // (3) START FEATURE WEIGHTING
         if (!empty($data_crawling) && !empty($prep_keyword_tokens)) {
-            // Ambil semua token judul
+
             $all_doc_tokens = array_column($data_crawling, 'preprocessed_title');
 
             // Hitung similarity berbasis TF-IDF (PHP-ML)
@@ -175,105 +177,94 @@ class SearchController extends Controller
             return $b['similarity'] <=> $a['similarity'];
         });
 
-        return view('result', compact('author', 'keyword', 'limit', 'data_crawling'));
+        return view('result', [
+            'author' => $author,
+            'keyword' => $keyword,
+            'limit' => $limit,
+            'data_crawling' => $data_crawling,
+            'prep_keyword_tokens' => $prep_keyword_tokens
+        ]);
     }
 
-
-    // ==================================================
-    //                PREPROCESSING LENGKAP
-    // ==================================================
+    // (2) START PREPROCESSING
     private function preprocessing($text)
     {
-        // 1. Cleaning (case folding + remove url + non-letter)
+        // 1. Cleaning
         $clean = strtolower($text);
-        $clean = preg_replace('/https?:\/\/\S+/', '', $clean);
-        $clean = preg_replace('/[^a-zA-Z\s]/', ' ', $clean);
+        $clean = preg_replace('/\bnot\s+(\w+)/', 'not_$1', $clean);
+        $clean = preg_replace('/\bno\s+(\w+)/', 'no_$1', $clean);
+        $clean = preg_replace('/\bnever\s+(\w+)/', 'never_$1', $clean);
+
+        $clean = preg_replace('/[^a-zA-Z0-9_\-\s]/', ' ', $clean);
         $clean = preg_replace('/\s+/', ' ', $clean);
         $clean = trim($clean);
 
         if ($clean == "") return [];
 
-        // 2. DETEKSI BAHASA (AUTO) MENGGUNAKAN GOOGLE TRANSLATE
+        // 2. Deteksi Bahasa (dengan Google Translate)
         try {
             $tr = new GoogleTranslate();
-            $tr->setSource();  // auto detect
+            $tr->setSource();
             $tr->setTarget('en');
             $tr->translate($clean);
-            $lang = $tr->getLastDetectedSource();  // "id" / "en" / lainnya
+
+            $lang = $tr->getLastDetectedSource();
         } catch (\Exception $e) {
             $lang = "en";
         }
 
-        // fallback jika Google gagal / bahasa tidak dikenali
+        // Hanya bahasa 'id' atau 'en'
         if (!in_array($lang, ['id', 'en'])) {
             $lang = "en";
         }
 
+        // Tokenized kata
         $words = explode(" ", $clean);
 
-        // ==================================================
-        //       INDONESIA → SASTRAWI
-        // ==================================================
+        // Indonesia pakai Sastrawi
         if ($lang == "id") {
 
-            $stemFactory = new StemmerFactory();
-            $stemmer = $stemFactory->createStemmer();
+            $stemmerFactory = new StemmerFactory();
+            $stemmer = $stemmerFactory->createStemmer();
 
-            $stopFactory = new StopWordRemoverFactory();
-            $stopword = $stopFactory->createStopWordRemover();
+            $stopwordFactory = new StopWordRemoverFactory();
+            $stopword = $stopwordFactory->createStopWordRemover();
 
-            $clean_no_stop = $stopword->remove($clean);
-            $stem = $stemmer->stem($clean_no_stop);
+            $stop = $stopword->remove($clean);
+            $stem = $stemmer->stem($stop);
 
-            return explode(" ", $stem);
+            return array_values(array_filter(explode(" ", $stem)));
         }
 
-        // ==================================================
-        //       INGGRIS → PORTER STEMMER
-        //   + STOPWORDS TXT (LAMA) + PHP-ML (BARU)
-        // ==================================================
+        // Inggris pakai Porter + kombinasi stopwords
         $stemmer = new EnglishStemmer();
 
-        //! Versi lama (pakai file english_stopwords.txt)
-        //! Disimpan sebagai referensi:
-        // $path = storage_path('english_stopwords.txt');
-        // if (!file_exists($path)) {
-        //     return $words; // fallback jika file tidak ada
-        // }
-        // $stopwords = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        // $filtered = array_filter($words, function ($w) use ($stopwords) {
-        //     return !in_array($w, $stopwords) && strlen($w) > 2;
-        // });
-
-        //! Versi baru: kombinasi STOPWORDS dari file + PHP-ML
+        // Langsung baca stopwords dari file txt (custom)
         $fileStopwords = [];
         $path = storage_path('english_stopwords.txt');
         if (file_exists($path)) {
             $fileStopwords = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
         }
 
-        // Objek stopwords English dari PHP-ML
+        // Langsung pakai stopwords dari PHP-ML
         $phpmlStop = new PhpmlEnglishStopwords();
 
-        // Filter stopwords + buang kata terlalu pendek
+        // Filter stopwords gabungan
         $filtered = array_filter($words, function ($w) use ($phpmlStop, $fileStopwords) {
-            // buang kalau:
-            // - termasuk stopword versi PHP-ML, ATAU
-            // - termasuk stopword custom dari file txt, ATAU
-            // - panjang kata <= 2
             return !$phpmlStop->isStopWord($w)
                 && !in_array($w, $fileStopwords)
                 && strlen($w) > 2;
         });
 
-        // Stemming dengan Snowball English stemmer
+        // Filter stemming
         $stemmed = array_map(function ($w) use ($stemmer) {
             return $stemmer->stem($w);
         }, $filtered);
 
+        $stemmed = array_filter($stemmed, fn($w) => trim($w) !== "");
+
         return array_values($stemmed);
     }
-
 
     //! Versinya bryan
     // ==================================================
@@ -374,40 +365,31 @@ class SearchController extends Controller
     //     return $similarities;
     // }
 
-    //! Versinya darius (AKTIF) – menggunakan PHP-ML
-    // ==================================================
-    //        FEATURE WEIGHTING (TF-IDF) + COSINE
-    //          MENGGUNAKAN LIBRARY PHP-ML
-    // ==================================================
     private function calculateTfidfSimilarities(array $queryTokens, array $documentsTokens)
     {
-        // 0. Ubah token → string (dipisah spasi)
+        // (3) START FEATURE WEIGHTING
         $queryString = implode(' ', $queryTokens);
         $docStrings  = array_map(function ($tokens) {
             return implode(' ', $tokens);
         }, $documentsTokens);
 
-        // Corpus: elemen pertama = query, sisanya = dokumen
         $corpus = array_merge([$queryString], $docStrings);
 
         if (trim($queryString) === '' || empty($docStrings)) {
             return [];
         }
 
-        // 1. Vectorizer: TF (Term Count) dengan tokenizer whitespace
         $vectorizer = new TokenCountVectorizer(new WhitespaceTokenizer());
         $vectorizer->fit($corpus);
-        $vectorizer->transform($corpus); // $corpus sekarang berisi TF
+        $vectorizer->transform($corpus);
 
-        // 2. TF-IDF Transformer: ubah TF → TF-IDF
         $tfIdf = new TfIdfTransformer($corpus);
-        $tfIdf->transform($corpus); // $corpus sekarang berisi TF-IDF
+        $tfIdf->transform($corpus);
 
-        // 3. Ambil vektor query & dokumen
+        // (4) START SIMILARITY CALCULATION
         $queryVector = $corpus[0];
         $docVectors  = array_slice($corpus, 1);
 
-        // 4. Hitung cosine similarity antara query & tiap dokumen
         $similarities = [];
         foreach ($docVectors as $idx => $docVector) {
             $similarities[$idx] = $this->cosineSimilarity($queryVector, $docVector);
@@ -416,9 +398,7 @@ class SearchController extends Controller
         return $similarities;
     }
 
-    // ==================================================
-    //          COSINE SIMILARITY HELPER (PHP-ML)
-    // ==================================================
+    // COSINE SIMILARITY HELPER (PHP-ML)
     private function cosineSimilarity(array $vecA, array $vecB)
     {
         $dot  = 0.0;
@@ -443,9 +423,7 @@ class SearchController extends Controller
         return round($dot / (sqrt($magA) * sqrt($magB)), 4);
     }
 
-    // ==================================================
-    //                 EXTRACT HTML
-    // ==================================================
+    // EXTRACT HTML
     function extract_html($url, $proxy)
     {
         $curl = curl_init();

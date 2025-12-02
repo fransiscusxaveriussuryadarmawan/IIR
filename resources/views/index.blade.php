@@ -1,105 +1,138 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8">
-<title>Pencarian Artikel Ilmiah</title>
+    <meta charset="UTF-8">
+    <title>Pencarian Artikel Ilmiah</title>
 
-<style>
-    body {
-        font-family: "Segoe UI", Arial, sans-serif;
-        background: #eef3f9;
-        display: flex;
-        justify-content: center;
-        padding-top: 50px;
-    }
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: "Segoe UI", Arial, sans-serif;
+            background: linear-gradient(135deg, #d9e8ff, #eef3f9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
 
-    .container {
-        background: white;
-        width: 500px;
-        padding: 30px;
-        border-radius: 15px;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.1);
-        animation: fadeIn 0.6s ease;
-    }
+        .card {
+            width: 100%;
+            max-width: 600px;
+            background: #ffffff;
+            padding: 40px 45px;
+            border-radius: 18px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+            animation: fadeIn 0.7s ease;
+        }
 
-    @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(20px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
 
-    h2 {
-        text-align: center;
-        font-weight: bold;
-        color: #2c3e50;
-    }
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
 
-    label {
-        font-weight: bold;
-        margin-bottom: 5px;
-        display: block;
-        color: #34495e;
-    }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
 
-    input {
-        width: 100%;
-        padding: 10px;
-        border: 2px solid #dce3eb;
-        border-radius: 8px;
-        font-size: 14px;
-        margin-bottom: 15px;
-        transition: 0.3s;
-    }
+        h2 {
+            text-align: center;
+            font-weight: 700;
+            color: #2c3e50;
+            font-size: 26px;
+        }
 
-    input:focus {
-        border-color: #3498db;
-        outline: none;
-        box-shadow: 0 0 5px rgba(52,152,219,0.4);
-    }
+        p.subtitle {
+            text-align: center;
+            color: #5d6d7e;
+            margin-top: -5px;
+            margin-bottom: 25px;
+        }
 
-    .btn-search {
-        width: 100%;
-        padding: 12px;
-        background: #3498db;
-        border: none;
-        border-radius: 8px;
-        color: white;
-        font-size: 16px;
-        cursor: pointer;
-        font-weight: bold;
-        transition: 0.3s;
-    }
+        label {
+            font-weight: 600;
+            margin-bottom: 6px;
+            color: #34495e;
+        }
 
-    .btn-search:hover {
-        background: #217dbb;
-    }
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #d0d7e2;
+            border-radius: 10px;
+            margin-bottom: 18px;
+            font-size: 14px;
+            transition: 0.3s;
+        }
 
-</style>
+        input:focus {
+            border-color: #3498db;
+            background: #f4faff;
+            outline: none;
+            box-shadow: 0 0 6px rgba(52, 152, 219, 0.4);
+        }
+
+        .btn-search {
+            width: 100%;
+            padding: 13px;
+            background: #3498db;
+            border: none;
+            border-radius: 10px;
+            color: white;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+
+        .btn-search:hover {
+            background: #217dbb;
+        }
+
+        footer {
+            margin-top: 25px;
+            text-align: center;
+            font-size: 13px;
+            color: #7f8c8d;
+        }
+    </style>
 </head>
+
 <body>
 
-<div class="container">
+    <div class="card">
 
-    <h2>PENCARIAN DATA ARTIKEL ILMIAH</h2>
-    <br>
+        <h2>Pencarian Artikel Ilmiah</h2>
+        <p class="subtitle">From Google Scholar</p>
 
-    <form action="/result" method="POST">
-        @csrf
+        <form action="/result" method="POST">
+            @csrf
 
-        <label>Nama Penulis</label>
-        <input type="text" name="author" placeholder="contoh: joko siswantoro">
+            <label>Nama Penulis</label>
+            <input type="text" name="author" placeholder="contoh: joko siswantoro" required>
 
-        <label>Keyword Artikel</label>
-        <input type="text" name="keyword" placeholder="contoh: modeling optimization">
+            <label>Keyword Artikel</label>
+            <input type="text" name="keyword" placeholder="contoh: modeling optimization" required>
 
-        <label>Jumlah Data</label>
-        <input type="number" name="limit" value="5" min="1">
+            <label>Jumlah Data</label>
+            <input type="number" name="limit" value="5" min="1" max="20" required>
 
-        <button class="btn-search" type="submit">
-            🔍 Cari Artikel
-        </button>
-    </form>
+            <button class="btn-search" type="submit">
+                🔍 Cari Artikel
+            </button>
+        </form>
 
-</div>
+        <footer>
+            IIR PROJECT &copy; 2025
+        </footer>
+
+    </div>
 
 </body>
+
 </html>
