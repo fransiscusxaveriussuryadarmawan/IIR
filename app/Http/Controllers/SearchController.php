@@ -88,7 +88,6 @@ class SearchController extends Controller
                             $link = $html_art->find('a.gsc_oci_title_link', 0)->href ?? "-";
                         }
 
-                        //! Di tahap ini kita hanya simpan token hasil preprocessing judul.
                         // (2) START PREPROCESSING JUDUL
                         $prep_title_tokens = $this->preprocessing($title);
 
@@ -114,11 +113,6 @@ class SearchController extends Controller
             }
         }
 
-        // ================================
-        //  FEATURE WEIGHTING + SIMILARITY
-        //   (TF-IDF + Cosine Coefficient)
-        // ================================
-
         // (2) START PREPROCESSING KEYWORD
         $prep_keyword_tokens = $this->preprocessing($keyword);
 
@@ -127,24 +121,20 @@ class SearchController extends Controller
 
             $all_doc_tokens = array_column($data_crawling, 'preprocessed_title');
 
-            // Hitung similarity berbasis TF-IDF
             $similarities = $this->calculateTfidfSimilarities(
                 $prep_keyword_tokens,
                 $all_doc_tokens
             );
 
-            // Masukkan kembali ke array utama
             foreach ($data_crawling as $idx => &$row) {
                 $row['similarity'] = $similarities[$idx] ?? 0;
             }
 
-            // Optionally: buang artikel yang similarity 0
             $data_crawling = array_values(array_filter($data_crawling, function ($row) {
                 return $row['similarity'] > 0;
             }));
         }
 
-        // SORTING (DESC)
         usort($data_crawling, function ($a, $b) {
             return $b['similarity'] <=> $a['similarity'];
         });
@@ -161,7 +151,6 @@ class SearchController extends Controller
     // (2) START PREPROCESSING
     private function preprocessing($text)
     {
-        // 1. Cleaning
         $clean = strtolower($text);
         $clean = preg_replace('/\bnot\s+(\w+)/', 'not_$1', $clean);
         $clean = preg_replace('/\bno\s+(\w+)/', 'no_$1', $clean);
@@ -173,7 +162,6 @@ class SearchController extends Controller
 
         if ($clean == "") return [];
 
-        // 2. Deteksi Bahasa (dengan Google Translate)
         try {
             $tr = new GoogleTranslate();
             $tr->setSource();
@@ -185,15 +173,12 @@ class SearchController extends Controller
             $lang = "en";
         }
 
-        // Hanya bahasa 'id' atau 'en'
         if (!in_array($lang, ['id', 'en'])) {
             $lang = "en";
         }
 
-        // Tokenized kata
         $words = explode(" ", $clean);
 
-        // Indonesia pakai Sastrawi
         if ($lang == "id") {
 
             $stemmerFactory = new StemmerFactory();
@@ -208,27 +193,22 @@ class SearchController extends Controller
             return array_values(array_filter(explode(" ", $stem)));
         }
 
-        // Inggris pakai Porter + kombinasi stopwords
         $stemmer = new EnglishStemmer();
 
-        // Langsung baca stopwords dari file txt (custom)
         $fileStopwords = [];
         $path = storage_path('english_stopwords.txt');
         if (file_exists($path)) {
             $fileStopwords = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
         }
 
-        // Langsung pakai stopwords dari PHP-ML
         $phpmlStop = new PhpmlEnglishStopwords();
 
-        // Filter stopwords gabungan
         $filtered = array_filter($words, function ($w) use ($phpmlStop, $fileStopwords) {
             return !$phpmlStop->isStopWord($w)
                 && !in_array($w, $fileStopwords)
                 && strlen($w) > 2;
         });
 
-        // Filter stemming
         $stemmed = array_map(function ($w) use ($stemmer) {
             return $stemmer->stem($w);
         }, $filtered);
@@ -271,7 +251,7 @@ class SearchController extends Controller
         return $similarities;
     }
 
-    // COSINE SIMILARITY HELPER (PHP-ML)
+    // COSINE SIMILARITY HELPER
     private function cosineSimilarity(array $vecA, array $vecB)
     {
         $dot  = 0.0;
